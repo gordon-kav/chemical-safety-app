@@ -1,0 +1,53 @@
+Go to the App's backend folder in Git Bash
+
+"C:\Users\Gordon\chemical-safety-app\backend\app"
+
+Type : cd /c/Users/Gordon/chemical-safety-app/backend/app
+
+Now get the Uvicorn server running
+
+uvicorn main:app --reload
+
+
+🟢 Chemical Safety App: Daily Startup Protocol
+1. Open the Terminal
+Right-click on your Desktop (or wherever you want) and select Git Bash Here.
+
+Alternatively: Open "Git Bash" from the Start Menu.
+
+2. Navigate to the Project
+Copy and paste this command to go straight to your backend folder (no matter where you started):
+
+Bash
+cd /c/Users/Gordon/chemical-safety-app/backend
+3. Activate the "Tool Belt" (Virtual Environment)
+This is the most critical step. You must tell the terminal to use your project's specific tools.
+
+Bash
+source venv/Scripts/activate
+✅ Check: Look at the start of your command line. It must say (venv) in parentheses. If it doesn't, stop and try this step again.
+
+4. Start the Server (The Engine)
+Run the application server:
+
+Bash
+uvicorn app.main:app --reload
+✅ Success Signal: You will see text saying Uvicorn running on http://127.0.0.1:8000.
+
+5. Verify it is working
+Leave the terminal window open (do not close it!). Open your web browser (Chrome/Edge) and go to:
+
+http://127.0.0.1:8000/docs
+
+If you see the FastAPI / Swagger UI page, you are live.
+
+6. How to Stop
+When you are finished working for the day:
+
+Click inside the terminal window.
+
+Press Ctrl + C on your keyboard (this kills the server).
+
+Type exit or close the window.
+
+
