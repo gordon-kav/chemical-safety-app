@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import Quagga from '@ericblade/quagga2'; // The "Stripe" Scanner
+/* eslint-disable */
+import React, { useState, useEffect, useCallback } from 'react';
+import Quagga from '@ericblade/quagga2';
 import axios from 'axios';
 
 function App() {
@@ -8,76 +9,11 @@ function App() {
   const [chemical, setChemical] = useState(null);
   const [status, setStatus] = useState("");
 
-  // --- 1. START THE SCANNER ---
-  useEffect(() => {
-    if (scanning) {
-      Quagga.init({
-        inputStream: {
-          name: "Live",
-          type: "LiveStream",
-          target: document.querySelector('#scanner-container'), // Target the div
-          constraints: {
-            facingMode: "environment", // Use Back Camera
-            width: { min: 640 },
-            height: { min: 480 },
-            aspectRatio: { min: 1, max: 2 }
-          },
-        },
-        locator: {
-          patchSize: "medium",
-          halfSample: true,
-        },
-        numOfWorkers: 2,
-        decoder: {
-          readers: [
-            "code_128_reader", // Standard Chemical Labels
-            "ean_reader",      // Soda cans / Books
-            "ean_8_reader",
-            "code_39_reader",  // Industrial
-            "upc_reader"       // Retail
-          ],
-        },
-        locate: true,
-      }, (err) => {
-        if (err) {
-          console.error(err);
-          setStatus("Error starting camera: " + err);
-          return;
-        }
-        Quagga.start();
-      });
-
-      // What to do when a barcode is found
-      Quagga.onDetected((result) => {
-        if (result && result.codeResult && result.codeResult.code) {
-          handleScan(result.codeResult.code);
-        }
-      });
-
-      // Cleanup when we stop scanning
-      return () => {
-        Quagga.stop();
-        Quagga.offDetected();
-      };
-    }
-  }, [scanning]);
-
-  // --- 2. HANDLE THE SUCCESSFUL SCAN ---
-  const handleScan = (code) => {
-    setScanning(false); // Stop the camera
-    setBarcode(code);   // Save the number
-    setStatus("Searching Cloud Database...");
-    checkDatabase(code); // Ask the Cloud
-  };
-
-  // --- 3. CHECK THE CLOUD (RENDER) ---
-  const checkDatabase = (code) => {
-    // ⚠️ CRITICAL: Pointing to your Render Cloud Backend
+  const checkDatabase = useCallback((code) => {
+    // ⚠️ This link points to your Render Cloud Backend
     axios.get('https://chemical-safety-app.onrender.com/chemicals/')
       .then(response => {
-        // Look for match
         const found = response.data.find(c => c.cas_number === code || c.name === code);
-        
         if (found) {
           setChemical(found);
           setStatus("Found!");
@@ -90,18 +26,73 @@ function App() {
         console.error("Error connecting to backend:", error);
         setStatus("Error: Could not connect to Cloud Backend.");
       });
-  };
+  }, []);
+
+  const handleScan = useCallback((code) => {
+    setScanning(false);
+    setBarcode(code);
+    setStatus("Searching Cloud Database...");
+    checkDatabase(code);
+  }, [checkDatabase]);
+
+  useEffect(() => {
+    if (scanning) {
+      Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: document.querySelector('#scanner-container'),
+          constraints: {
+            facingMode: "environment",
+            width: { min: 640 },
+            height: { min: 480 },
+            aspectRatio: { min: 1, max: 2 }
+          },
+        },
+        locator: {
+          patchSize: "medium",
+          halfSample: true,
+        },
+        numOfWorkers: 2,
+        decoder: {
+          readers: [
+            "code_128_reader",
+            "ean_reader",
+            "ean_8_reader",
+            "code_39_reader",
+            "upc_reader"
+          ],
+        },
+        locate: true,
+      }, (err) => {
+        if (err) {
+          console.error(err);
+          setStatus("Error starting camera: " + err);
+          return;
+        }
+        Quagga.start();
+      });
+
+      Quagga.onDetected((result) => {
+        if (result && result.codeResult && result.codeResult.code) {
+          handleScan(result.codeResult.code);
+        }
+      });
+
+      return () => {
+        Quagga.stop();
+        Quagga.offDetected();
+      };
+    }
+  }, [scanning]);
 
   return (
     <div style={{ textAlign: "center", padding: "20px", fontFamily: "Arial" }}>
       <h1>🧪 Chemical Safety Scanner</h1>
       
-      {/* CAMERA WINDOW */}
       {scanning ? (
         <div style={{ margin: "0 auto", maxWidth: "100%" }}>
-          <div id="scanner-container" style={{ width: "100%", height: "300px", overflow: "hidden", border: "5px solid #333" }}>
-            {/* Quagga injects the video here */}
-          </div>
+          <div id="scanner-container" style={{ width: "100%", height: "300px", overflow: "hidden", border: "5px solid #333" }}></div>
           <button onClick={() => setScanning(false)} style={{ marginTop: "10px", padding: "10px", fontSize: "16px" }}>
             Stop Camera
           </button>
@@ -119,7 +110,6 @@ function App() {
         </button>
       )}
 
-      {/* RESULTS */}
       <div style={{ marginTop: "30px" }}>
         <h3>Barcode: {barcode}</h3>
         <p style={{ fontWeight: "bold", color: status.includes("Error") ? "red" : "blue" }}>{status}</p>
@@ -137,4 +127,3 @@ function App() {
 }
 
 export default App;
- 
