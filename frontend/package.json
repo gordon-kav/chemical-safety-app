@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "dependencies": {
+    "@ericblade/quagga2": "^1.12.1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -10,7 +11,6 @@
     "axios": "^1.13.3",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
-    "react-qr-barcode-scanner": "^2.1.20",
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4"
   },
