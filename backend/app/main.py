@@ -1,30 +1,102 @@
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel
+from typing import List, Optional
+from sqlalchemy import create_engine, Column, Integer, String, JSON
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 import os
-from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
-from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+import requests 
 
-# Import your local files
-from . import crud, models, schemas
-from .database import SessionLocal, engine
+# --- DATABASE SETUP ---
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    DATABASE_URL = "sqlite:///./chemical_inventory.db"  # Fallback for local testing
 
-# 1. Create the database tables automatically
-models.Base.metadata.create_all(bind=engine)
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
+# --- DATABASE MODEL ---
+class Chemical(Base):
+    __tablename__ = "chemicals"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, index=True)
+    cas_number = Column(String, unique=True, index=True)
+    hazards = Column(String) # Storing as a simple string for now
+    description = Column(String)
+
+# Create tables
+Base.metadata.create_all(bind=engine)
+
+# --- PYDANTIC MODELS (Data Validation) ---
+class ChemicalBase(BaseModel):
+    name: String
+    cas_number: String
+    hazards: String
+    description: String
+
+class ChemicalCreate(ChemicalBase):
+    pass
+
+class ChemicalResponse(ChemicalBase):
+    id: int
+    class Config:
+        orm_mode = True
+
+# --- THE BRIDGE LOGIC (New!) ---
+KEYWORD_MAP = {
+    "bleach": "sodium hypochlorite",
+    "clorox": "sodium hypochlorite",
+    "domestos": "sodium hypochlorite",
+    "acetone": "acetone",
+    "polish remover": "acetone",
+    "spirit": "mineral spirits",
+    "turpentine": "turpentine",
+    "ethanol": "ethanol",
+    "alcohol": "ethanol",
+    "methanol": "methanol",
+    "drain": "sodium hydroxide",
+    "soda": "sodium bicarbonate"
+}
+
+def fetch_hazards_from_pubchem(chemical_name: str):
+    """
+    Searches PubChem for a chemical and returns a string of hazards.
+    """
+    try:
+        # 1. Get CID
+        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{chemical_name}/cids/JSON"
+        resp = requests.get(url)
+        if resp.status_code != 200:
+            return None
+        
+        cid = resp.json()['IdentifierList']['CID'][0]
+        
+        # 2. Get Hazards
+        details_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON?heading=GHS%20Classification"
+        resp_details = requests.get(details_url)
+        
+        if resp_details.status_code == 200:
+            full_text = resp_details.text
+            hazards = []
+            if "H22" in full_text: hazards.append("Flammable")
+            if "H30" in full_text: hazards.append("Toxic if swallowed")
+            if "H31" in full_text: hazards.append("Skin Irritant")
+            if "H35" in full_text: hazards.append("Carcinogenic")
+            if "H4" in full_text:  hazards.append("Aquatic Toxicity")
+            
+            if not hazards: return "Safe / No Data"
+            return ", ".join(list(set(hazards)))
+            
+    except Exception as e:
+        print(f"PubChem Error: {e}")
+        return None
+    return None
+
+# --- APP SETUP ---
 app = FastAPI()
 
-# 2. Add CORS (So your Frontend can talk to this Backend)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Dependency: Get the database session for each request
+# Dependency to get DB session
 def get_db():
     db = SessionLocal()
     try:
@@ -34,32 +106,51 @@ def get_db():
 
 # --- ROUTES ---
 
-@app.get("/", tags=["Root"])
+@app.get("/")
 def read_root():
-    return {"status": "Chemical Safety API is running"}
+    return {"message": "Chemical Safety API is Running!"}
 
-# POST: Add a new chemical
-@app.post("/chemicals/", response_model=schemas.Chemical, tags=["Chemicals"])
-def create_chemical(chemical: schemas.ChemicalCreate, db: Session = Depends(get_db)):
-    return crud.create_chemical(db=db, chemical=chemical)
+@app.post("/chemicals/", response_model=ChemicalResponse)
+def create_chemical(chemical: ChemicalCreate, db: Session = Depends(get_db)):
+    db_chemical = Chemical(**chemical.dict())
+    db.add(db_chemical)
+    db.commit()
+    db.refresh(db_chemical)
+    return db_chemical
 
-# GET: List all chemicals
-@app.get("/chemicals/", response_model=List[schemas.Chemical], tags=["Chemicals"])
+@app.get("/chemicals/", response_model=List[ChemicalResponse])
 def read_chemicals(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    chemicals = crud.get_chemicals(db, skip=skip, limit=limit)
+    chemicals = db.query(Chemical).offset(skip).limit(limit).all()
     return chemicals
-    # Mount the React build folder
-# Make sure this path points to where your 'frontend/build' folder is
-# We use '..' to go up one level from 'backend/app' to 'backend', then '..' to root, then 'frontend/build'
-build_path = os.path.join(os.path.dirname(__file__), "../../frontend/build")
 
-if os.path.exists(build_path):
-    app.mount("/static", StaticFiles(directory=f"{build_path}/static"), name="static")
-
-    # Catch-all route to serve the React App
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        # If the API path was not matched above, serve the index.html
-        return FileResponse(f"{build_path}/index.html")
-else:
-    print("Warning: React build folder not found. Did you run 'npm run build'?")
+# --- NEW INTELLIGENT ENDPOINT ---
+@app.get("/autofill/{query}")
+def autofill_data(query: str):
+    """
+    Takes a rough name (e.g. 'Clorox') and tries to find scientific data.
+    """
+    query = query.lower()
+    
+    # 1. Try to translate store name to science name
+    scientific_name = None
+    for key, value in KEYWORD_MAP.items():
+        if key in query:
+            scientific_name = value
+            break
+    
+    # If no keyword match, try the raw query
+    if not scientific_name:
+        scientific_name = query
+        
+    # 2. Ask PubChem
+    found_hazards = fetch_hazards_from_pubchem(scientific_name)
+    
+    if found_hazards:
+        return {
+            "found": True,
+            "suggested_name": scientific_name.title(),
+            "hazards": found_hazards,
+            "description": f"Auto-detected via PubChem search for '{scientific_name}'"
+        }
+    else:
+        return {"found": False}
