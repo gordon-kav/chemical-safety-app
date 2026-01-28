@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware  # <--- NEW IMPORT
 from pydantic import BaseModel
 from typing import List, Optional
 from sqlalchemy import create_engine, Column, Integer, String
@@ -16,7 +17,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- DATABASE MODEL (SQLAlchemy uses 'String') ---
+# --- DATABASE MODEL ---
 class Chemical(Base):
     __tablename__ = "chemicals"
     id = Column(Integer, primary_key=True, index=True)
@@ -25,11 +26,9 @@ class Chemical(Base):
     hazards = Column(String) 
     description = Column(String)
 
-# Create tables
 Base.metadata.create_all(bind=engine)
 
-# --- PYDANTIC MODELS (Python uses 'str') ---
-# This is where the error was fixed!
+# --- PYDANTIC MODELS ---
 class ChemicalBase(BaseModel):
     name: str
     cas_number: str
@@ -91,6 +90,16 @@ def fetch_hazards_from_pubchem(chemical_name: str):
 
 # --- APP SETUP ---
 app = FastAPI()
+
+# --- SECURITY FIX (CORS) ---
+# This tells the backend: "Allow anyone to talk to me"
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], 
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_db():
     db = SessionLocal()
