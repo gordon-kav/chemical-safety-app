@@ -1,15 +1,15 @@
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware  # <--- NEW IMPORT
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from fastapi.responses import StreamingResponse
-import io
-import csv
 from typing import List, Optional
-from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy import create_engine, Column, Integer, String, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 import os
 import requests 
+import io
+import csv
 
 # --- DATABASE SETUP ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -28,7 +28,9 @@ class Chemical(Base):
     cas_number = Column(String, unique=True, index=True)
     hazards = Column(String) 
     description = Column(String)
+    sds_link = Column(String) # <--- NEW COLUMN
 
+# Create tables (Only works for new tables, won't auto-update existing ones)
 Base.metadata.create_all(bind=engine)
 
 # --- PYDANTIC MODELS ---
@@ -37,6 +39,7 @@ class ChemicalBase(BaseModel):
     cas_number: str
     hazards: str
     description: str
+    sds_link: Optional[str] = "" # <--- NEW FIELD
 
 class ChemicalCreate(ChemicalBase):
     pass
@@ -64,6 +67,7 @@ KEYWORD_MAP = {
 
 def fetch_hazards_from_pubchem(chemical_name: str):
     try:
+        # 1. Get CID
         url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{chemical_name}/cids/JSON"
         resp = requests.get(url)
         if resp.status_code != 200:
@@ -71,20 +75,32 @@ def fetch_hazards_from_pubchem(chemical_name: str):
         
         cid = resp.json()['IdentifierList']['CID'][0]
         
+        # 2. Generate the Official LCSS (SDS) Link
+        # This links to the Safety section of the PubChem page
+        sds_url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}#section=Safety-and-Hazards"
+
+        # 3. Get Hazards
         details_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON?heading=GHS%20Classification"
         resp_details = requests.get(details_url)
         
+        hazards = []
         if resp_details.status_code == 200:
             full_text = resp_details.text
-            hazards = []
             if "H22" in full_text: hazards.append("Flammable")
             if "H30" in full_text: hazards.append("Toxic if swallowed")
             if "H31" in full_text: hazards.append("Skin Irritant")
             if "H35" in full_text: hazards.append("Carcinogenic")
             if "H4" in full_text:  hazards.append("Aquatic Toxicity")
-            
-            if not hazards: return "Safe / No Data"
-            return ", ".join(list(set(hazards)))
+        
+        if not hazards: 
+            hazards_str = "Safe / No Data"
+        else:
+            hazards_str = ", ".join(list(set(hazards)))
+
+        return {
+            "hazards": hazards_str,
+            "sds_link": sds_url
+        }
             
     except Exception as e:
         print(f"PubChem Error: {e}")
@@ -94,8 +110,6 @@ def fetch_hazards_from_pubchem(chemical_name: str):
 # --- APP SETUP ---
 app = FastAPI()
 
-# --- SECURITY FIX (CORS) ---
-# This tells the backend: "Allow anyone to talk to me"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -116,6 +130,17 @@ def get_db():
 @app.get("/")
 def read_root():
     return {"message": "Chemical Safety API is Running!"}
+
+# --- DATABASE REPAIR TOOL (Run once) ---
+@app.get("/db-upgrade")
+def upgrade_db(db: Session = Depends(get_db)):
+    try:
+        # This forces the database to add the new 'sds_link' column
+        db.execute(text("ALTER TABLE chemicals ADD COLUMN sds_link VARCHAR;"))
+        db.commit()
+        return {"message": "Database successfully upgraded! 'sds_link' column added."}
+    except Exception as e:
+        return {"message": "Database likely already upgraded or error occurred.", "details": str(e)}
 
 @app.post("/chemicals/", response_model=ChemicalResponse)
 def create_chemical(chemical: ChemicalCreate, db: Session = Depends(get_db)):
@@ -143,40 +168,33 @@ def autofill_data(query: str):
     if not scientific_name:
         scientific_name = query
         
-    found_hazards = fetch_hazards_from_pubchem(scientific_name)
+    data = fetch_hazards_from_pubchem(scientific_name)
     
-    if found_hazards:
+    if data:
         return {
             "found": True,
             "suggested_name": scientific_name.title(),
-            "hazards": found_hazards,
+            "hazards": data["hazards"],
+            "sds_link": data["sds_link"], # <--- Sending the link back
             "description": f"Auto-detected via PubChem search for '{scientific_name}'"
         }
     else:
         return {"found": False}
-        # --- EXPORT ENDPOINT ---
+
 @app.get("/export_csv")
 def export_inventory(db: Session = Depends(get_db)):
-    # 1. Get all chemicals
     chemicals = db.query(Chemical).all()
-    
-    # 2. Create a CSV in memory (like a virtual file)
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # 3. Write the Header Row
-    writer.writerow(["ID", "Name", "CAS/Barcode", "Hazards", "Description"])
+    # Updated Header to include SDS Link
+    writer.writerow(["ID", "Name", "CAS/Barcode", "Hazards", "Description", "SDS Link"])
     
-    # 4. Write the Data Rows
     for c in chemicals:
-        writer.writerow([c.id, c.name, c.cas_number, c.hazards, c.description])
+        # Updated Row to include SDS Link
+        writer.writerow([c.id, c.name, c.cas_number, c.hazards, c.description, c.sds_link])
         
     output.seek(0)
-    
-    # 5. Send it to the user as a file download
-    response = StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv"
-    )
+    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=chemical_inventory.csv"
     return response
