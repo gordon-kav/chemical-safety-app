@@ -158,4 +158,49 @@ def autofill(query: str):
     q = query.lower()
     name = KEYWORD_MAP.get(q, q)
     data = fetch_hazards_from_pubchem(name)
-    if data: return {"found": True, "suggested_name": name.title(), "hazards": data["hazards"], "
+    if data: 
+        # I have split this into multiple lines to prevent copy-paste errors
+        return {
+            "found": True, 
+            "suggested_name": name.title(), 
+            "hazards": data["hazards"], 
+            "sds_link": data["sds_link"], 
+            "description": "Auto-filled"
+        }
+    return {"found": False}
+
+@app.get("/export_csv")
+def export_csv(db: Session = Depends(get_db)):
+    chemicals = db.query(Chemical).all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Name", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards"])
+    for c in chemicals:
+        writer.writerow([c.id, c.name, c.cas_number, c.tracking_id, c.quantity_value, c.quantity_unit, c.hazards])
+    output.seek(0)
+    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=inventory.csv"
+    return response
+
+# --- USAGE / DEDUCTION LOGIC ---
+class UsageRequest(BaseModel):
+    tracking_id: str
+    amount_used: float
+
+@app.post("/use_chemical/")
+def use_chemical(usage: UsageRequest, db: Session = Depends(get_db)):
+    bottle = db.query(Chemical).filter(Chemical.tracking_id == usage.tracking_id).first()
+    if not bottle:
+        raise HTTPException(status_code=404, detail="Bottle not found")
+    
+    if bottle.quantity_value is None: bottle.quantity_value = 0.0
+    remaining = bottle.quantity_value - usage.amount_used
+    
+    if remaining <= 0:
+        remaining = 0
+        bottle.description = (bottle.description or "") + " [EMPTY]"
+    
+    bottle.quantity_value = remaining
+    db.commit()
+    db.refresh(bottle)
+    return {"name": bottle.name, "remaining_quantity": remaining, "unit": bottle.quantity_unit}
