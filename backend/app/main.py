@@ -12,7 +12,14 @@ import io
 import csv
 import uuid 
 
+# --- DATABASE SETUP (Fixed for Render) ---
 DATABASE_URL = os.getenv("DATABASE_URL")
+
+# FIX: Render provides "postgres://", but SQLAlchemy needs "postgresql://"
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# FALLBACK: Local testing
 if not DATABASE_URL:
     DATABASE_URL = "sqlite:///./chemical_inventory.db"
 
@@ -20,7 +27,7 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# --- UPDATED DATABASE MODEL ---
+# --- DATABASE MODELS ---
 class Chemical(Base):
     __tablename__ = "chemicals"
     id = Column(Integer, primary_key=True, index=True)
@@ -29,7 +36,6 @@ class Chemical(Base):
     hazards = Column(String) 
     description = Column(String)
     sds_link = Column(String)
-    # SPLIT QUANTITY FOR MATH
     quantity_value = Column(Float)  # e.g. 500.0
     quantity_unit = Column(String)  # e.g. "ml"
     tracking_id = Column(String, unique=True) 
@@ -42,7 +48,6 @@ class ChemicalBase(BaseModel):
     hazards: str
     description: str
     sds_link: Optional[str] = ""
-    # INPUTS FOR MATH
     quantity_value: float 
     quantity_unit: str
 
@@ -55,8 +60,14 @@ class ChemicalResponse(ChemicalBase):
     class Config:
         orm_mode = True
 
-# --- BRIDGE LOGIC (Same as before) ---
-KEYWORD_MAP = { "bleach": "sodium hypochlorite", "clorox": "sodium hypochlorite", "acetone": "acetone", "ethanol": "ethanol", "methanol": "methanol" }
+# --- BRIDGE LOGIC ---
+KEYWORD_MAP = { 
+    "bleach": "sodium hypochlorite", 
+    "clorox": "sodium hypochlorite", 
+    "acetone": "acetone", 
+    "ethanol": "ethanol", 
+    "methanol": "methanol" 
+}
 
 def fetch_hazards_from_pubchem(chemical_name: str):
     try:
@@ -85,25 +96,26 @@ def get_db():
     try: yield db
     finally: db.close()
 
-# --- DATABASE REPAIR TOOL V3 ---
+# --- ROUTES ---
+
+@app.get("/")
+def read_root():
+    return {"message": "Inventory System Online"}
+
 @app.get("/db-upgrade-v3")
 def upgrade_db_v3(db: Session = Depends(get_db)):
     msgs = []
     try:
-        # Add new math columns
         try: db.execute(text("ALTER TABLE chemicals ADD COLUMN quantity_value FLOAT;")); msgs.append("Added quantity_value")
         except: pass
         try: db.execute(text("ALTER TABLE chemicals ADD COLUMN quantity_unit VARCHAR;")); msgs.append("Added quantity_unit")
         except: pass
         try: db.execute(text("ALTER TABLE chemicals ADD COLUMN tracking_id VARCHAR;")); msgs.append("Added tracking_id")
         except: pass
-        
-        # Remove unique constraint so we can have multiple bottles
         try: db.execute(text("DROP INDEX IF EXISTS ix_chemicals_cas_number;")); msgs.append("Allowed duplicate barcodes")
         except: pass
         try: db.execute(text("ALTER TABLE chemicals DROP CONSTRAINT IF EXISTS chemicals_cas_number_key;")); msgs.append("Removed constraint")
         except: pass
-
         db.commit()
         return {"status": "success", "updates": msgs}
     except Exception as e: return {"error": str(e)}
@@ -125,23 +137,16 @@ def create_chemical(chemical: ChemicalCreate, db: Session = Depends(get_db)):
     db.refresh(new_chemical)
     return new_chemical
 
-# --- NEW: TOTAL STOCK ENDPOINT ---
-# This calculates the total volume for a specific chemical name
 @app.get("/total_stock/{chemical_name}")
 def get_total_stock(chemical_name: str, db: Session = Depends(get_db)):
-    # Find all bottles with this name
     bottles = db.query(Chemical).filter(Chemical.name.ilike(f"%{chemical_name}%")).all()
-    
     total = 0.0
     unit = "unknown"
-    
     if bottles:
-        # Assume all bottles of same chemical use same unit (e.g. ml) for MVP
         unit = bottles[0].quantity_unit 
         for b in bottles:
             if b.quantity_unit == unit:
                 total += (b.quantity_value or 0)
-    
     return {"chemical": chemical_name, "total_stock": total, "unit": unit, "bottle_count": len(bottles)}
 
 @app.get("/chemicals/", response_model=List[ChemicalResponse])
@@ -150,24 +155,7 @@ def read_chemicals(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
 
 @app.get("/autofill/{query}")
 def autofill(query: str):
-    # (Same autofill logic as before)
-    # ... for brevity, assume standard implementation ... 
-    # Use the same logic from previous step here
     q = query.lower()
     name = KEYWORD_MAP.get(q, q)
     data = fetch_hazards_from_pubchem(name)
-    if data: return {"found": True, "suggested_name": name.title(), "hazards": data["hazards"], "sds_link": data["sds_link"], "description": "Auto-filled"}
-    return {"found": False}
-
-@app.get("/export_csv")
-def export_csv(db: Session = Depends(get_db)):
-    chemicals = db.query(Chemical).all()
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["ID", "Name", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards"])
-    for c in chemicals:
-        writer.writerow([c.id, c.name, c.cas_number, c.tracking_id, c.quantity_value, c.quantity_unit, c.hazards])
-    output.seek(0)
-    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
-    response.headers["Content-Disposition"] = "attachment; filename=inventory.csv"
-    return response
+    if data: return {"found": True, "suggested_name": name.title(), "hazards": data["hazards"], "
