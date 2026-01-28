@@ -174,9 +174,23 @@ def export_csv(db: Session = Depends(get_db)):
     chemicals = db.query(Chemical).all()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID", "Name", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards"])
+    
+    # 1. Update the Headers
+    writer.writerow(["ID", "Name", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards", "SDS Link"])
+    
     for c in chemicals:
-        writer.writerow([c.id, c.name, c.cas_number, c.tracking_id, c.quantity_value, c.quantity_unit, c.hazards])
+        # 2. Update the Data Row (adding c.sds_link)
+        writer.writerow([
+            c.id, 
+            c.name, 
+            c.cas_number, 
+            c.tracking_id, 
+            c.quantity_value, 
+            c.quantity_unit, 
+            c.hazards, 
+            c.sds_link or ""  # Handles cases where link is missing
+        ])
+        
     output.seek(0)
     response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
     response.headers["Content-Disposition"] = "attachment; filename=inventory.csv"
@@ -204,3 +218,4 @@ def use_chemical(usage: UsageRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(bottle)
     return {"name": bottle.name, "remaining_quantity": remaining, "unit": bottle.quantity_unit}
+    
