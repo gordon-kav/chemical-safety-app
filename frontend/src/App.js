@@ -13,6 +13,7 @@ function App() {
   const [formName, setFormName] = useState("");
   const [formHazards, setFormHazards] = useState("");
   const [formDescription, setFormDescription] = useState("");
+  const [formSDS, setFormSDS] = useState(""); // <--- NEW STATE
 
   const API_URL = 'https://chemical-safety-app.onrender.com'; 
 
@@ -30,6 +31,7 @@ function App() {
           setFormName("");
           setFormHazards("");
           setFormDescription("");
+          setFormSDS(""); // Reset SDS
         }
       })
       .catch(error => {
@@ -46,6 +48,7 @@ function App() {
         if(res.data.found) {
            setFormHazards(res.data.hazards);
            setFormDescription(res.data.description);
+           setFormSDS(res.data.sds_link || ""); // <--- Fill SDS
            alert("Data found via PubChem! 🧪");
         } else {
            alert("Could not find data in PubChem. You can type it manually.");
@@ -59,7 +62,8 @@ function App() {
       name: formName,
       cas_number: barcode, 
       hazards: formHazards || "Unknown",
-      description: formDescription || "Added via App"
+      description: formDescription || "Added via App",
+      sds_link: formSDS || "" // <--- Save SDS
     };
 
     axios.post(`${API_URL}/chemicals/`, payload)
@@ -74,9 +78,7 @@ function App() {
       });
   };
 
-  // --- NEW: Export Function ---
   const handleDownload = () => {
-      // This triggers the browser to download the file directly from your server
       window.location.href = `${API_URL}/export_csv`;
   };
 
@@ -109,7 +111,6 @@ function App() {
     }
   }, [scanning, handleScan]);
 
-  // --- STYLES ---
   const styles = {
     container: { fontFamily: "sans-serif", backgroundColor: "#f4f6f9", minHeight: "100vh", paddingBottom: "50px" },
     navbar: { backgroundColor: "#2c3e50", color: "white", padding: "15px", textAlign: "center", display: "flex", justifyContent: "space-between", alignItems: "center" },
@@ -120,6 +121,7 @@ function App() {
     btnScan: { width: "100%", padding: "15px", fontSize: "1.1rem", fontWeight: "bold", color: "white", backgroundColor: "#3498db", border: "none", borderRadius: "8px", cursor: "pointer" },
     btnAction: { padding: "10px 20px", marginTop: "10px", backgroundColor: "#27ae60", color: "white", border: "none", borderRadius: "5px", fontWeight: "bold", cursor: "pointer", width: "100%" },
     btnAuto: { backgroundColor: "#8e44ad", marginBottom: "10px" }, 
+    btnSDS: { backgroundColor: "#e67e22", display: "inline-block", textDecoration: "none", color: "white", padding: "10px", borderRadius: "5px", marginTop: "10px", fontWeight: "bold" },
     input: { width: "100%", padding: "10px", margin: "5px 0 15px 0", borderRadius: "5px", border: "1px solid #ddd", boxSizing: "border-box" },
     label: { display: "block", textAlign: "left", fontWeight: "bold", color: "#555" }
   };
@@ -134,12 +136,10 @@ function App() {
     <div style={styles.container}>
       <nav style={styles.navbar}>
           <h1 style={styles.navTitle}>🧪 Lab Safety</h1>
-          {/* THE NEW DOWNLOAD BUTTON */}
           <button onClick={handleDownload} style={styles.btnDownload}>📥 Export CSV</button>
       </nav>
 
       <main style={styles.main}>
-        
         {scanning ? (
           <div style={styles.card}>
             <div id="scanner-container" style={{ height: "250px", overflow: "hidden" }}></div>
@@ -161,6 +161,14 @@ function App() {
             <div style={{backgroundColor: "#fff3cd", padding: "10px", borderRadius: "5px"}}>
               <strong>⚠️ Hazards:</strong> {chemical.hazards}
             </div>
+            {/* VIEW SDS BUTTON */}
+            {chemical.sds_link && (
+                <div style={{marginTop: "15px", textAlign: "center"}}>
+                    <a href={chemical.sds_link} target="_blank" rel="noopener noreferrer" style={styles.btnSDS}>
+                       📄 View Official SDS
+                    </a>
+                </div>
+            )}
           </div>
         )}
 
@@ -181,23 +189,17 @@ function App() {
              </button>
 
              <label style={styles.label}>Hazards:</label>
-             <input 
-                style={styles.input} 
-                value={formHazards}
-                onChange={e => setFormHazards(e.target.value)}
-             />
+             <input style={styles.input} value={formHazards} onChange={e => setFormHazards(e.target.value)} />
+
+             <label style={styles.label}>SDS Link (Auto-Filled):</label>
+             <input style={styles.input} value={formSDS} onChange={e => setFormSDS(e.target.value)} placeholder="https://..." />
 
              <label style={styles.label}>Description:</label>
-             <input 
-                style={styles.input} 
-                value={formDescription}
-                onChange={e => setFormDescription(e.target.value)}
-             />
+             <input style={styles.input} value={formDescription} onChange={e => setFormDescription(e.target.value)} />
 
              <button onClick={handleSave} style={styles.btnAction}>💾 Save to Database</button>
            </div>
         )}
-
       </main>
     </div>
   );
