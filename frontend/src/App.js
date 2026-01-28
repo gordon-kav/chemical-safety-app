@@ -9,12 +9,12 @@ function App() {
   const [chemical, setChemical] = useState(null);
   const [status, setStatus] = useState("IDLE"); 
   
-  // --- NEW: Form State ---
+  // Form State
   const [formName, setFormName] = useState("");
   const [formHazards, setFormHazards] = useState("");
   const [formDescription, setFormDescription] = useState("");
 
-  const API_URL = 'https://chemical-safety-app.onrender.com'; // Your Backend URL
+  const API_URL = 'https://chemical-safety-app.onrender.com'; 
 
   const checkDatabase = useCallback((code) => {
     setStatus("SEARCHING");
@@ -27,7 +27,6 @@ function App() {
         } else {
           setChemical(null);
           setStatus("NOT_FOUND");
-          // Reset form for new entry
           setFormName("");
           setFormHazards("");
           setFormDescription("");
@@ -39,11 +38,9 @@ function App() {
       });
   }, []);
 
-  // --- NEW: Auto-Fill Function ---
   const handleAutoFill = () => {
     if(!formName) return alert("Please type a name first (e.g. 'Bleach')");
     
-    // Call your new intelligent endpoint
     axios.get(`${API_URL}/autofill/${formName}`)
       .then(res => {
         if(res.data.found) {
@@ -57,11 +54,10 @@ function App() {
       .catch(err => alert("Error connecting to intelligence engine."));
   };
 
-  // --- NEW: Save Function ---
   const handleSave = () => {
     const payload = {
       name: formName,
-      cas_number: barcode, // We use the barcode as the ID
+      cas_number: barcode, 
       hazards: formHazards || "Unknown",
       description: formDescription || "Added via App"
     };
@@ -70,12 +66,18 @@ function App() {
       .then(res => {
         alert("Saved to Inventory! ✅");
         setStatus("FOUND");
-        setChemical(res.data); // Show the newly saved card
+        setChemical(res.data);
       })
       .catch(err => {
         console.error(err);
         alert("Error saving: " + err.message);
       });
+  };
+
+  // --- NEW: Export Function ---
+  const handleDownload = () => {
+      // This triggers the browser to download the file directly from your server
+      window.location.href = `${API_URL}/export_csv`;
   };
 
   const handleScan = useCallback((code) => {
@@ -110,12 +112,14 @@ function App() {
   // --- STYLES ---
   const styles = {
     container: { fontFamily: "sans-serif", backgroundColor: "#f4f6f9", minHeight: "100vh", paddingBottom: "50px" },
-    navbar: { backgroundColor: "#2c3e50", color: "white", padding: "15px", textAlign: "center" },
+    navbar: { backgroundColor: "#2c3e50", color: "white", padding: "15px", textAlign: "center", display: "flex", justifyContent: "space-between", alignItems: "center" },
+    navTitle: { margin: 0, fontSize: "1.2rem" },
+    btnDownload: { fontSize: "0.8rem", padding: "8px 12px", backgroundColor: "#27ae60", color: "white", border: "none", borderRadius: "4px", cursor: "pointer" },
     main: { maxWidth: "600px", margin: "0 auto", padding: "20px" },
     card: { backgroundColor: "white", borderRadius: "12px", padding: "20px", boxShadow: "0 4px 6px rgba(0,0,0,0.05)", marginBottom: "20px", textAlign: "center" },
     btnScan: { width: "100%", padding: "15px", fontSize: "1.1rem", fontWeight: "bold", color: "white", backgroundColor: "#3498db", border: "none", borderRadius: "8px", cursor: "pointer" },
     btnAction: { padding: "10px 20px", marginTop: "10px", backgroundColor: "#27ae60", color: "white", border: "none", borderRadius: "5px", fontWeight: "bold", cursor: "pointer", width: "100%" },
-    btnAuto: { backgroundColor: "#8e44ad", marginBottom: "10px" }, // Purple button
+    btnAuto: { backgroundColor: "#8e44ad", marginBottom: "10px" }, 
     input: { width: "100%", padding: "10px", margin: "5px 0 15px 0", borderRadius: "5px", border: "1px solid #ddd", boxSizing: "border-box" },
     label: { display: "block", textAlign: "left", fontWeight: "bold", color: "#555" }
   };
@@ -128,7 +132,12 @@ function App() {
 
   return (
     <div style={styles.container}>
-      <nav style={styles.navbar}><h1>🧪 Chemical Safety</h1></nav>
+      <nav style={styles.navbar}>
+          <h1 style={styles.navTitle}>🧪 Lab Safety</h1>
+          {/* THE NEW DOWNLOAD BUTTON */}
+          <button onClick={handleDownload} style={styles.btnDownload}>📥 Export CSV</button>
+      </nav>
+
       <main style={styles.main}>
         
         {scanning ? (
@@ -145,7 +154,6 @@ function App() {
            <h3>{status === "FOUND" ? "✅ Verified Safe" : status === "NOT_FOUND" ? "⚠️ Not in Database" : "Ready"}</h3>
         </div>
 
-        {/* 1. VIEW EXISTING CHEMICAL */}
         {chemical && (
           <div style={{ ...styles.card, textAlign: "left" }}>
             <h2>{chemical.name}</h2>
@@ -156,7 +164,6 @@ function App() {
           </div>
         )}
 
-        {/* 2. ADD NEW CHEMICAL FORM */}
         {status === "NOT_FOUND" && (
            <div style={{ ...styles.card, textAlign: "left" }}>
              <h3>➕ Add New Item</h3>
@@ -169,7 +176,6 @@ function App() {
                 onChange={e => setFormName(e.target.value)}
              />
 
-             {/* The Intelligent Button */}
              <button onClick={handleAutoFill} style={{...styles.btnAction, ...styles.btnAuto}}>
                 ✨ Auto-Fill Hazards (PubChem)
              </button>
