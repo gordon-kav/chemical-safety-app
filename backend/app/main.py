@@ -1,6 +1,9 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware  # <--- NEW IMPORT
 from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
+import io
+import csv
 from typing import List, Optional
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.ext.declarative import declarative_base
@@ -151,3 +154,29 @@ def autofill_data(query: str):
         }
     else:
         return {"found": False}
+        # --- EXPORT ENDPOINT ---
+@app.get("/export_csv")
+def export_inventory(db: Session = Depends(get_db)):
+    # 1. Get all chemicals
+    chemicals = db.query(Chemical).all()
+    
+    # 2. Create a CSV in memory (like a virtual file)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # 3. Write the Header Row
+    writer.writerow(["ID", "Name", "CAS/Barcode", "Hazards", "Description"])
+    
+    # 4. Write the Data Rows
+    for c in chemicals:
+        writer.writerow([c.id, c.name, c.cas_number, c.hazards, c.description])
+        
+    output.seek(0)
+    
+    # 5. Send it to the user as a file download
+    response = StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv"
+    )
+    response.headers["Content-Disposition"] = "attachment; filename=chemical_inventory.csv"
+    return response
