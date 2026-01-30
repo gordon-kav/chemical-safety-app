@@ -5,8 +5,9 @@ from typing import Optional
 class ChemicalBase(BaseModel):
     name: str
     cas_number: str
-    description: Optional[str] = None
-    hazards: Optional[str] = None
+    barcode: Optional[str] = None  # <--- NEW LINE HERE
+    hazards: str
+    # ... (keep the rest same)
 
 # Schema for creating a chemical (Frontend sends this)
 class ChemicalCreate(ChemicalBase):

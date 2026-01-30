@@ -7,6 +7,7 @@ class Chemical(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
-    cas_number = Column(String, unique=True, index=True)
-    description = Column(Text, nullable=True)
-    hazards = Column(String, nullable=True) # e.g., "Flammable, Corrosive"
+    cas_number = Column(String, index=True)
+    barcode = Column(String, index=True, nullable=True)  # <--- NEW LINE HERE
+    tracking_id = Column(String, unique=True, index=True)
+    # ... (keep the rest the same) ...

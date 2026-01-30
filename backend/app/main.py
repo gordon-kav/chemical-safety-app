@@ -175,6 +175,27 @@ def export_csv(db: Session = Depends(get_db)):
     output = io.StringIO()
     writer = csv.writer(output)
     
+    # NEW HEADERS: Added "Barcode" after CAS Number
+    writer.writerow(["ID", "Name", "CAS Number", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards", "SDS Link"])
+    
+    for c in chemicals:
+        writer.writerow([
+            c.id, 
+            c.name, 
+            c.cas_number, 
+            c.barcode or "",  # <--- THE NEW DATA
+            c.tracking_id, 
+            c.quantity_value, 
+            c.quantity_unit, 
+            c.hazards, 
+            c.sds_link or ""
+        ])
+        
+    output.seek(0)
+    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=inventory.csv"
+    return response
+    
     # 1. Update the Headers
     writer.writerow(["ID", "Name", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards", "SDS Link"])
     
@@ -218,4 +239,3 @@ def use_chemical(usage: UsageRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(bottle)
     return {"name": bottle.name, "remaining_quantity": remaining, "unit": bottle.quantity_unit}
-    
