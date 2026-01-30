@@ -11,3 +11,5 @@ class Chemical(Base):
     barcode = Column(String, index=True, nullable=True)  # <--- NEW LINE HERE
     tracking_id = Column(String, unique=True, index=True)
     # ... (keep the rest the same) ...
+    barcode = Column(String, index=True, nullable=True)
+    

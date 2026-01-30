@@ -6,6 +6,7 @@ from typing import List, Optional
 from sqlalchemy import create_engine, Column, Integer, String, Float, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy import text  # <--- Add this line near the top with other imports
 import os
 import requests 
 import io
@@ -239,3 +240,12 @@ def use_chemical(usage: UsageRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(bottle)
     return {"name": bottle.name, "remaining_quantity": remaining, "unit": bottle.quantity_unit}
+@app.get("/fix_db_column")
+def fix_db_column(db: Session = Depends(get_db)):
+    try:
+        # This SQL command runs from INSIDE the server, so no firewall issues!
+        db.execute(text("ALTER TABLE chemicals ADD COLUMN IF NOT EXISTS barcode VARCHAR;"))
+        db.commit()
+        return {"status": "success", "message": "✅ Barcode column added successfully!"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
