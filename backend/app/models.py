@@ -12,5 +12,5 @@ class Chemical(Base):
     tracking_id = Column(String, unique=True, index=True)
     quantity_value = Column(Float)
     quantity_unit = Column(String)
-    hazards = Column(String)
+    hazards = Column(Strgiing)
     sds_link = Column(String)
