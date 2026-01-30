@@ -1,251 +1,125 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, Depends, HTTPException
+from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
-from typing import List, Optional
-from sqlalchemy import create_engine, Column, Integer, String, Float, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy import text  # <--- Add this line near the top with other imports
-import os
-import requests 
-import io
 import csv
-import uuid 
+import io
+from fastapi.responses import StreamingResponse
+from typing import List
 
-# --- DATABASE SETUP (Fixed for Render) ---
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Import your database and models
+from .database import engine, SessionLocal
+from . import models, schemas
 
-# FIX: Render provides "postgres://", but SQLAlchemy needs "postgresql://"
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# FALLBACK: Local testing
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./chemical_inventory.db"
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-# --- DATABASE MODELS ---
-class Chemical(Base):
-    __tablename__ = "chemicals"
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    cas_number = Column(String, index=True) 
-    hazards = Column(String) 
-    description = Column(String)
-    sds_link = Column(String)
-    quantity_value = Column(Float)  # e.g. 500.0
-    quantity_unit = Column(String)  # e.g. "ml"
-    tracking_id = Column(String, unique=True) 
-
-Base.metadata.create_all(bind=engine)
-
-class ChemicalBase(BaseModel):
-    name: str
-    cas_number: str
-    hazards: str
-    description: str
-    sds_link: Optional[str] = ""
-    quantity_value: float 
-    quantity_unit: str
-
-class ChemicalCreate(ChemicalBase):
-    pass
-
-class ChemicalResponse(ChemicalBase):
-    id: int
-    tracking_id: Optional[str] = None
-    class Config:
-        orm_mode = True
-
-# --- BRIDGE LOGIC ---
-KEYWORD_MAP = { 
-    "bleach": "sodium hypochlorite", 
-    "clorox": "sodium hypochlorite", 
-    "acetone": "acetone", 
-    "ethanol": "ethanol", 
-    "methanol": "methanol" 
-}
-
-def fetch_hazards_from_pubchem(chemical_name: str):
-    try:
-        url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/{chemical_name}/cids/JSON"
-        resp = requests.get(url)
-        if resp.status_code != 200: return None
-        cid = resp.json()['IdentifierList']['CID'][0]
-        sds_url = f"https://pubchem.ncbi.nlm.nih.gov/compound/{cid}#section=Safety-and-Hazards"
-        details_url = f"https://pubchem.ncbi.nlm.nih.gov/rest/pug_view/data/compound/{cid}/JSON?heading=GHS%20Classification"
-        resp_details = requests.get(details_url)
-        hazards = []
-        if resp_details.status_code == 200:
-            if "H22" in resp_details.text: hazards.append("Flammable")
-            if "H30" in resp_details.text: hazards.append("Toxic")
-            if "H31" in resp_details.text: hazards.append("Irritant")
-            if "H35" in resp_details.text: hazards.append("Carcinogenic")
-            if "H4" in resp_details.text:  hazards.append("Aquatic Hazard")
-        return {"hazards": ", ".join(list(set(hazards))) if hazards else "Safe", "sds_link": sds_url}
-    except: return None
+# Create the database tables (This ensures tables exist)
+models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+# --- CORS (Security) ---
+# This allows your frontend (and yourself) to talk to this backend
+origins = ["*"]  # "Allow everyone" - simplest for your setup
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Dependency to get Database Connection ---
 def get_db():
     db = SessionLocal()
-    try: yield db
-    finally: db.close()
+    try:
+        yield db
+    finally:
+        db.close()
 
-# --- ROUTES ---
+# --- Routes ---
 
 @app.get("/")
 def read_root():
-    return {"message": "Inventory System Online"}
+    return {"message": "Chemical Safety API is Live"}
 
-@app.get("/db-upgrade-v3")
-def upgrade_db_v3(db: Session = Depends(get_db)):
-    msgs = []
-    try:
-        try: db.execute(text("ALTER TABLE chemicals ADD COLUMN quantity_value FLOAT;")); msgs.append("Added quantity_value")
-        except: pass
-        try: db.execute(text("ALTER TABLE chemicals ADD COLUMN quantity_unit VARCHAR;")); msgs.append("Added quantity_unit")
-        except: pass
-        try: db.execute(text("ALTER TABLE chemicals ADD COLUMN tracking_id VARCHAR;")); msgs.append("Added tracking_id")
-        except: pass
-        try: db.execute(text("DROP INDEX IF EXISTS ix_chemicals_cas_number;")); msgs.append("Allowed duplicate barcodes")
-        except: pass
-        try: db.execute(text("ALTER TABLE chemicals DROP CONSTRAINT IF EXISTS chemicals_cas_number_key;")); msgs.append("Removed constraint")
-        except: pass
-        db.commit()
-        return {"status": "success", "updates": msgs}
-    except Exception as e: return {"error": str(e)}
+@app.get("/chemicals", response_model=List[schemas.Chemical])
+def read_chemicals(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    chemicals = db.query(models.Chemical).offset(skip).limit(limit).all()
+    return chemicals
 
-@app.post("/chemicals/", response_model=ChemicalResponse)
-def create_chemical(chemical: ChemicalCreate, db: Session = Depends(get_db)):
-    new_chemical = Chemical(
+@app.post("/chemicals", response_model=schemas.Chemical)
+def create_chemical(chemical: schemas.ChemicalCreate, db: Session = Depends(get_db)):
+    # Check if tracking_id already exists to prevent duplicates
+    db_chemical = db.query(models.Chemical).filter(models.Chemical.tracking_id == chemical.tracking_id).first()
+    if db_chemical:
+        raise HTTPException(status_code=400, detail="Tracking ID already registered")
+    
+    # Create the new chemical entry
+    new_chemical = models.Chemical(
         name=chemical.name,
         cas_number=chemical.cas_number,
-        hazards=chemical.hazards,
-        description=chemical.description,
-        sds_link=chemical.sds_link,
+        barcode=getattr(chemical, "barcode", None), # Safety check for input
+        tracking_id=chemical.tracking_id,
         quantity_value=chemical.quantity_value,
         quantity_unit=chemical.quantity_unit,
-        tracking_id=str(uuid.uuid4())[:8]
+        hazards=chemical.hazards,
+        sds_link=chemical.sds_link
     )
     db.add(new_chemical)
     db.commit()
     db.refresh(new_chemical)
     return new_chemical
 
-@app.get("/total_stock/{chemical_name}")
-def get_total_stock(chemical_name: str, db: Session = Depends(get_db)):
-    bottles = db.query(Chemical).filter(Chemical.name.ilike(f"%{chemical_name}%")).all()
-    total = 0.0
-    unit = "unknown"
-    if bottles:
-        unit = bottles[0].quantity_unit 
-        for b in bottles:
-            if b.quantity_unit == unit:
-                total += (b.quantity_value or 0)
-    return {"chemical": chemical_name, "total_stock": total, "unit": unit, "bottle_count": len(bottles)}
-
-@app.get("/chemicals/", response_model=List[ChemicalResponse])
-def read_chemicals(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return db.query(Chemical).offset(skip).limit(limit).all()
-
-@app.get("/autofill/{query}")
-def autofill(query: str):
-    q = query.lower()
-    name = KEYWORD_MAP.get(q, q)
-    data = fetch_hazards_from_pubchem(name)
-    if data: 
-        # I have split this into multiple lines to prevent copy-paste errors
-        return {
-            "found": True, 
-            "suggested_name": name.title(), 
-            "hazards": data["hazards"], 
-            "sds_link": data["sds_link"], 
-            "description": "Auto-filled"
-        }
-    return {"found": False}
+@app.get("/search", response_model=List[schemas.Chemical])
+def search_chemicals(q: str, db: Session = Depends(get_db)):
+    # Search by Name, CAS Number, or Barcode
+    results = db.query(models.Chemical).filter(
+        (models.Chemical.name.ilike(f"%{q}%")) | 
+        (models.Chemical.cas_number.ilike(f"%{q}%")) |
+        (models.Chemical.barcode.ilike(f"%{q}%"))
+    ).all()
+    return results
 
 @app.get("/export_csv")
 def export_csv(db: Session = Depends(get_db)):
-    chemicals = db.query(Chemical).all()
+    chemicals = db.query(models.Chemical).all()
+    
+    # Create an in-memory file
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # NEW HEADERS: Added "Barcode" after CAS Number
-    writer.writerow(["ID", "Name", "CAS Number", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards", "SDS Link"])
+    # Write the Header Row
+    writer.writerow([
+        "ID", 
+        "Name", 
+        "CAS Number", 
+        "Barcode", 
+        "Tracking ID", 
+        "Quantity", 
+        "Unit", 
+        "Hazards", 
+        "SDS Link"
+    ])
     
+    # Write the Data Rows
     for c in chemicals:
         writer.writerow([
-            c.id, 
-            c.name, 
-            c.cas_number, 
-            c.barcode or "",  # <--- THE NEW DATA
-            c.tracking_id, 
-            c.quantity_value, 
-            c.quantity_unit, 
-            c.hazards, 
-            c.sds_link or ""
+            c.id,
+            c.name,
+            c.cas_number,
+            # SAFETY VALVE: This checks if 'barcode' exists. 
+            # If it's missing, it inserts an empty string instead of crashing.
+            getattr(c, "barcode", ""), 
+            c.tracking_id,
+            c.quantity_value,
+            c.quantity_unit,
+            c.hazards,
+            c.sds_link
         ])
         
     output.seek(0)
-    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
-    response.headers["Content-Disposition"] = "attachment; filename=inventory.csv"
-    return response
     
-    # 1. Update the Headers
-    writer.writerow(["ID", "Name", "Barcode", "Tracking ID", "Qty Value", "Qty Unit", "Hazards", "SDS Link"])
-    
-    for c in chemicals:
-        # 2. Update the Data Row (adding c.sds_link)
-        writer.writerow([
-            c.id, 
-            c.name, 
-            c.cas_number, 
-            c.tracking_id, 
-            c.quantity_value, 
-            c.quantity_unit, 
-            c.hazards, 
-            c.sds_link or ""  # Handles cases where link is missing
-        ])
-        
-    output.seek(0)
-    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
-    response.headers["Content-Disposition"] = "attachment; filename=inventory.csv"
-    return response
-
-# --- USAGE / DEDUCTION LOGIC ---
-class UsageRequest(BaseModel):
-    tracking_id: str
-    amount_used: float
-
-@app.post("/use_chemical/")
-def use_chemical(usage: UsageRequest, db: Session = Depends(get_db)):
-    bottle = db.query(Chemical).filter(Chemical.tracking_id == usage.tracking_id).first()
-    if not bottle:
-        raise HTTPException(status_code=404, detail="Bottle not found")
-    
-    if bottle.quantity_value is None: bottle.quantity_value = 0.0
-    remaining = bottle.quantity_value - usage.amount_used
-    
-    if remaining <= 0:
-        remaining = 0
-        bottle.description = (bottle.description or "") + " [EMPTY]"
-    
-    bottle.quantity_value = remaining
-    db.commit()
-    db.refresh(bottle)
-    return {"name": bottle.name, "remaining_quantity": remaining, "unit": bottle.quantity_unit}
-@app.get("/fix_db_column")
-def fix_db_column(db: Session = Depends(get_db)):
-    try:
-        # This SQL command runs from INSIDE the server, so no firewall issues!
-        db.execute(text("ALTER TABLE chemicals ADD COLUMN IF NOT EXISTS barcode VARCHAR;"))
-        db.commit()
-        return {"status": "success", "message": "✅ Barcode column added successfully!"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inventory.csv"}
+    )
