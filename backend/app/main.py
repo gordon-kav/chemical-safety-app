@@ -1,28 +1,29 @@
+import os
+import sys
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from fastapi.middleware.cors import CORSMiddleware
 import csv
 import io
 from fastapi.responses import StreamingResponse
-from typing import Listimport os
-import sys
+from typing import List
 
-# --- DEBUGGING PRINT ---
+# Import your database and models
+from .database import engine, SessionLocal
+from . import models, schemas
+
+# --- DEBUGGING PRINT (Checking if Render sees the Database) ---
 print("--------------------------------------------------")
 print("DEBUG CHECK STARTING")
 db_url = os.getenv("DATABASE_URL")
 print(f"DEBUG: DATABASE_URL is: {db_url}")
+
 if not db_url:
     print("DEBUG: ALERT! The variable is MISSING. Using SQLite.")
 else:
     print("DEBUG: Variable found. Connecting to Postgres.")
 print("--------------------------------------------------")
-# -----------------------
-
-
-# Import your database and models
-from .database import engine, SessionLocal
-from . import models, schemas
+# ------------------------------------------------------------
 
 # Create the database tables (This ensures tables exist)
 models.Base.metadata.create_all(bind=engine)
@@ -30,8 +31,7 @@ models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 # --- CORS (Security) ---
-# This allows your frontend (and yourself) to talk to this backend
-origins = ["*"]  # "Allow everyone" - simplest for your setup
+origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,16 +62,14 @@ def read_chemicals(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
 
 @app.post("/chemicals", response_model=schemas.Chemical)
 def create_chemical(chemical: schemas.ChemicalCreate, db: Session = Depends(get_db)):
-    # Check if tracking_id already exists to prevent duplicates
     db_chemical = db.query(models.Chemical).filter(models.Chemical.tracking_id == chemical.tracking_id).first()
     if db_chemical:
         raise HTTPException(status_code=400, detail="Tracking ID already registered")
     
-    # Create the new chemical entry
     new_chemical = models.Chemical(
         name=chemical.name,
         cas_number=chemical.cas_number,
-        barcode=getattr(chemical, "barcode", None), # Safety check for input
+        barcode=getattr(chemical, "barcode", None),
         tracking_id=chemical.tracking_id,
         quantity_value=chemical.quantity_value,
         quantity_unit=chemical.quantity_unit,
@@ -85,7 +83,6 @@ def create_chemical(chemical: schemas.ChemicalCreate, db: Session = Depends(get_
 
 @app.get("/search", response_model=List[schemas.Chemical])
 def search_chemicals(q: str, db: Session = Depends(get_db)):
-    # Search by Name, CAS Number, or Barcode
     results = db.query(models.Chemical).filter(
         (models.Chemical.name.ilike(f"%{q}%")) | 
         (models.Chemical.cas_number.ilike(f"%{q}%")) |
@@ -97,11 +94,9 @@ def search_chemicals(q: str, db: Session = Depends(get_db)):
 def export_csv(db: Session = Depends(get_db)):
     chemicals = db.query(models.Chemical).all()
     
-    # Create an in-memory file
     output = io.StringIO()
     writer = csv.writer(output)
     
-    # Write the Header Row
     writer.writerow([
         "ID", 
         "Name", 
@@ -114,14 +109,11 @@ def export_csv(db: Session = Depends(get_db)):
         "SDS Link"
     ])
     
-    # Write the Data Rows
     for c in chemicals:
         writer.writerow([
             c.id,
             c.name,
             c.cas_number,
-            # SAFETY VALVE: This checks if 'barcode' exists. 
-            # If it's missing, it inserts an empty string instead of crashing.
             getattr(c, "barcode", ""), 
             c.tracking_id,
             c.quantity_value,
