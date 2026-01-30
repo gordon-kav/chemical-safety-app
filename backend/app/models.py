@@ -13,3 +13,5 @@ class Chemical(Base):
     quantity_unit = Column(String)
     hazards = Column(String)        # Fixed spelling (was Strgiing)
     sds_link = Column(String)
+    # Force update v3
+    
