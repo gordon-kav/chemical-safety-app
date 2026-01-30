@@ -4,7 +4,21 @@ from fastapi.middleware.cors import CORSMiddleware
 import csv
 import io
 from fastapi.responses import StreamingResponse
-from typing import List
+from typing import Listimport os
+import sys
+
+# --- DEBUGGING PRINT ---
+print("--------------------------------------------------")
+print("DEBUG CHECK STARTING")
+db_url = os.getenv("DATABASE_URL")
+print(f"DEBUG: DATABASE_URL is: {db_url}")
+if not db_url:
+    print("DEBUG: ALERT! The variable is MISSING. Using SQLite.")
+else:
+    print("DEBUG: Variable found. Connecting to Postgres.")
+print("--------------------------------------------------")
+# -----------------------
+
 
 # Import your database and models
 from .database import engine, SessionLocal
